@@ -25,6 +25,9 @@ runtime: python                          # 运行时类型: node | python | none
 entry: app.plugins.my_source.provider:MyProvider   # provider 类的导入路径
 check: app.plugins.my_source.bridge:availability   # 可用性检测函数(可选)
 datasets: [daily, adj_factor, minute, realtime]     # 支持的数据集
+selectable: true                         # 可选(默认 true): 是否可作为全局数据源被用户选择;
+                                         # false = 市场专用源(如 binance 仅供 crypto 市场路由),
+                                         # 在设置页展示但不进入全局单选候选
 description: "数据源描述"
 install_hint: "pip install xxx"          # 未装依赖时显示的安装提示
 ```

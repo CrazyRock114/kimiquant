@@ -123,9 +123,17 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   }, [qc])
 
   const handleToggleQuote = useCallback(async (enabled: boolean) => {
-    await toggleQuote.mutateAsync(enabled)
+    const res = await toggleQuote.mutateAsync(enabled)
     qc.invalidateQueries({ queryKey: QK.preferences })
     qc.invalidateQueries({ queryKey: QK.quoteStatus })
+    // 后端拒绝开启时开关会回弹, 这里把原因说出来 (此前静默回弹, 用户无感知)
+    if (enabled && res && res.realtime_quotes_enabled === false) {
+      if (res.error === 'watchlist_empty') {
+        toast('自选实时模式需要先在「自选」页添加标的', 'error')
+      } else if (res.realtime_allowed === false) {
+        toast('当前档位不支持实时行情：未配置 TickFlow Key 时仅支持历史日K。在「凭据与能力」配置 Key 后，免费档可开启自选股实时。', 'error')
+      }
+    }
   }, [toggleQuote, qc])
 
   const toggleSidebarIndex = useCallback((symbol: string, visible: boolean) => {
@@ -289,6 +297,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               isPaused ? '数据同步运行中，已临时暂停'
               : isRunning && isTrading ? '运行中'
               : isRunning ? '运行中 (非交易时段)'
+              : quoteMode === 'none' ? '已关闭（当前档位不支持实时行情，需在「凭据与能力」配置 TickFlow Key）'
               : '已关闭'
             }
             checked={realtimeEnabled}

@@ -15,6 +15,7 @@ from app.data_providers.custom.loader import (
     names,
     provider_has_dataset,
     save_config,
+    selectable_names,
     uninstall_plugin,
 )
 
@@ -34,5 +35,6 @@ __all__ = [
     "names",
     "provider_has_dataset",
     "save_config",
+    "selectable_names",
     "uninstall_plugin",
 ]

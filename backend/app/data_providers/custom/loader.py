@@ -249,6 +249,12 @@ def names() -> set[str]:
     return set(_PROVIDERS)
 
 
+def selectable_names() -> set[str]:
+    """可作为全局数据源被用户选择的 provider 名（排除 selectable: false 的市场专用源）。"""
+    excluded = {n for n, st in _PLUGIN_STATUS.items() if not st.get("selectable", True)}
+    return set(_PROVIDERS) - excluded
+
+
 def errors() -> list[dict]:
     return list(_LOAD_ERRORS)
 
@@ -510,6 +516,10 @@ def _register_one_plugin(manifest: dict) -> None:
         logger.warning("插件清单缺少合法 name: %r", name)
         return
     runtime = str(manifest.get("runtime", "none")).lower()
+    # selectable: 是否可作为全局「日K/分钟K…数据源」被用户选择。
+    # 市场专用源（如 binance 仅供 crypto 市场路由）置 false: 仍在插件列表展示,
+    # 但不进入全局单选候选, 避免误选后挤掉其他市场的数据通路。
+    selectable = bool(manifest.get("selectable", True))
     # 委托检测: 调用插件自己的 check 函数 (node 型/python 型各自实现)
     available, reason = _call_check(manifest.get("check"))
     _PLUGIN_STATUS[name] = {
@@ -521,6 +531,7 @@ def _register_one_plugin(manifest: dict) -> None:
         "status": reason,
         "description": manifest.get("description", ""),
         "install_hint": manifest.get("install_hint", ""),
+        "selectable": selectable,
     }
     if not available:
         return  # 依赖没装: 不注册, 但状态已记录供 UI 显示

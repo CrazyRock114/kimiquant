@@ -229,8 +229,12 @@ export function SettingsDataSourcesPanel() {
                   {pluginNames.has(item.name) && (
                     <span className="shrink-0 rounded bg-warning/15 px-1 py-0.5 text-[9px] font-medium leading-none text-warning">第三方</span>
                   )}
-                  {/* 右侧操作区: 插件未安装→安装按钮; 已激活→使用中; 否则→使用/卸载 */}
-                  {pluginUnavailable ? (
+                  {/* 右侧操作区: 插件未安装→安装按钮; 市场专用源→徽章; 已激活→使用中; 否则→使用/卸载 */}
+                  {plugin && plugin.selectable === false ? (
+                    <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium leading-none text-accent">
+                      市场专用 · 自动启用
+                    </span>
+                  ) : pluginUnavailable ? (
                     installing ? (
                       <span className="inline-flex items-center gap-1 text-[9px] text-accent shrink-0">
                         <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 安装中...
@@ -446,7 +450,11 @@ function PluginDetail({ plugin, isActive, onSwitch, switching }: {
         </div>
       </div>
       <div className="flex items-center gap-3">
-        {isActive ? (
+        {plugin.selectable === false ? (
+          <span className="inline-flex items-center gap-1 text-[10px] text-accent bg-accent/10 px-2 py-1 rounded">
+            <Check className="h-2.5 w-2.5" /> 市场专用 · 自动启用（不参与全局数据源单选）
+          </span>
+        ) : isActive ? (
           <span className="inline-flex items-center gap-1 text-[10px] text-accent bg-accent/10 px-2 py-1 rounded">
             <Check className="h-2.5 w-2.5" /> 使用中
           </span>

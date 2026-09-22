@@ -1401,6 +1401,7 @@ export interface PluginDataSourceItem {
   status: string           // 可用性原因 (供 UI 显示)
   description: string
   install_hint: string     // 未装依赖时显示的安装命令
+  selectable?: boolean     // false = 市场专用源(如 binance/crypto), 不参与全局单选
 }
 
 export interface DataSourceLoadError {

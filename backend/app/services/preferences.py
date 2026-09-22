@@ -249,7 +249,9 @@ def get_data_source_long_job_timeout_s() -> int:
 def _allowed_data_providers() -> set[str]:
     try:
         from app.data_providers import custom as custom_sources
-        return _ALLOWED_DATA_PROVIDERS | custom_sources.names()
+        # 只含用户可选的源：selectable=false 的市场专用插件（如 binance/crypto）
+        # 不参与全局单选，避免误选后挤掉其他市场的数据通路。
+        return _ALLOWED_DATA_PROVIDERS | custom_sources.selectable_names()
     except Exception:  # noqa: BLE001
         return set(_ALLOWED_DATA_PROVIDERS)
 

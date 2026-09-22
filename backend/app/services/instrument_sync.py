@@ -99,6 +99,22 @@ def sync_instruments(data_dir: Path, markets: list[str] | None = None) -> int:
     if markets is None:
         markets = list(ALL_MARKETS)
 
+    # crypto 与全局「日K数据源」单选相互独立、始终并行生效：
+    # 无论 TickFlow 直连还是自定义 provider 接管其他市场, crypto 都走币安插件。
+    crypto_rows: list[dict] = []
+    if "crypto" in markets:
+        try:
+            items = _fetch_crypto_instruments()
+            if items:
+                crypto_rows = _flatten_instruments(items)
+                logger.info("instruments crypto (BINANCE): %d pairs", len(items))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("crypto instruments failed: %s", e)
+        if not crypto_rows:
+            # 拉取失败时保留现有 crypto 行 — 全量覆盖写不应因币安暂时不可达
+            # 而把维表里的 crypto 标的抹掉（日K/分钟K等其他数据不受影响）。
+            crypto_rows = _load_existing_crypto_rows(data_dir)
+
     all_rows = _fetch_instruments_via_provider()
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
@@ -106,15 +122,7 @@ def sync_instruments(data_dir: Path, markets: list[str] | None = None) -> int:
         all_rows = []
         for market in markets:
             if market == "crypto":
-                # crypto 不走 TickFlow：币安插件公开接口（失败只跳过，不影响其他市场）
-                try:
-                    items = _fetch_crypto_instruments()
-                    if items:
-                        all_rows.extend(_flatten_instruments(items))
-                        logger.info("instruments crypto (BINANCE): %d pairs", len(items))
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("crypto instruments failed: %s", e)
-                continue
+                continue  # 已由上方 crypto 专属路径处理
             for ex in get_market(market).exchanges:
                 try:
                     items = tf.exchanges.get_instruments(ex, instrument_type="stock")
@@ -123,6 +131,7 @@ def sync_instruments(data_dir: Path, markets: list[str] | None = None) -> int:
                         logger.info("instruments %s (%s): %d stocks", ex, market, len(items))
                 except Exception as e:
                     logger.warning("get_instruments(%s) failed: %s", ex, e)
+    all_rows.extend(crypto_rows)
 
     if not all_rows:
         return 0
@@ -194,6 +203,22 @@ def _fetch_crypto_instruments() -> list[dict]:
         return provider.get_instruments("stock") or []
     finally:
         provider.close()
+
+
+def _load_existing_crypto_rows(data_dir: Path) -> list[dict]:
+    """读取现有 instruments.parquet 里的 crypto 行（全量覆盖写时保留旧 crypto 维表用）。"""
+    out = data_dir / "instruments" / "instruments.parquet"
+    if not out.exists():
+        return []
+    try:
+        df = pl.read_parquet(out)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("读取现有 instruments 失败: %s", e)
+        return []
+    if df.is_empty() or "market" not in df.columns:
+        return []
+    old = df.filter(pl.col("market") == "crypto").drop("as_of", strict=False)
+    return old.to_dicts()
 
 
 def sync_crypto_instruments(data_dir: Path) -> int:

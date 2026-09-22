@@ -8,5 +8,7 @@ display_name: "币安 (Crypto)"
 runtime: none
 entry: app.plugins.binance.provider:BinanceProvider
 datasets: [daily]
+# crypto 市场专用源：由市场路由(run_market_sync)始终启用，不参与全局「日K数据源」单选
+selectable: false
 description: "币安现货公开行情（/exchangeInfo + /klines），无需 Key。仅供 crypto 市场内部路由：标的为成交额 Top N 的 USDT 现货对，日K 为 UTC 自然日。国内网络不可达时需配置 HTTPS_PROXY。"
 install_hint: "无额外依赖；国内网络需配置 HTTPS_PROXY 环境变量"
