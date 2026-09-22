@@ -1,0 +1,12 @@
+# 币安公开行情数据源插件（crypto 市场专用）
+# 直连 Binance Spot 公开 REST API，无需 API Key、无第三方依赖（httpx 为核心依赖）。
+# crypto 市场的标的维表与日K由 run_market_sync 按市场路由到本插件，
+# 不经过全局「日K数据源」偏好（该机制是全局单选，不适用于按市场分流）。
+
+name: binance
+display_name: "币安 (Crypto)"
+runtime: none
+entry: app.plugins.binance.provider:BinanceProvider
+datasets: [daily]
+description: "币安现货公开行情（/exchangeInfo + /klines），无需 Key。仅供 crypto 市场内部路由：标的为成交额 Top N 的 USDT 现货对，日K 为 UTC 自然日。国内网络不可达时需配置 HTTPS_PROXY。"
+install_hint: "无额外依赖；国内网络需配置 HTTPS_PROXY 环境变量"
