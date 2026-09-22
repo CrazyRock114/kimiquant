@@ -65,6 +65,14 @@ desktop = [
     "pywebview>=5.0",
 ]
 
+# 通达信行情协议数据源插件 (plugins/pytdx)。cryptography 锁 <46:
+# 新版在 macOS 无预构建 wheel 会触发 Rust 源码编译失败。
+# 启用:`uv sync --extra pytdx` (Docker: BACKEND_EXTRAS=pytdx)
+pytdx = [
+    "pytdx>=1.72",
+    "cryptography<46",
+]
+
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

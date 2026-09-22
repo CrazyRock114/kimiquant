@@ -87,6 +87,19 @@ BACKEND_EXTRAS=legacy-cpu backtest # 兼容老 CPU + 回测依赖
 
 vectorbt → numba 体积较大,作为可选 extras(`uv sync --extra backtest`)。macOS / Intel 无预构建 wheel 时需 `brew install cmake` 现场编译。
 
+### pytdx 插件依赖说明 (通达信行情协议数据源, 可选)
+
+pytdx 插件(沪深京 A 股实时/日K/分钟K/除权)为可选 extras, 默认不安装:
+
+- **Dev 源码启动**:`cd backend && uv sync --extra pytdx`
+- **Docker**:在根目录 `.env` 设置 `BACKEND_EXTRAS=pytdx`(可与其他 extras 组合, 如 `legacy-cpu pytdx`)后 `docker compose up --build`
+- `cryptography` 已锁定 `<46` —— 新版在 macOS 无预构建 wheel, 会触发 Rust 源码编译失败
+
+> ⚠️ 通达信行情协议为社区逆向实现(无官方公开规范), 存在合规与稳定性风险,
+> 仅覆盖 A 股; 与 stock-sdk 同级, 启用即视为知悉并自行承担责任。
+> 网传 IP 服务器列表已大面积失效, 插件默认使用券商域名服务器(国泰君安)并支持
+> `TDX_HOSTS="host:port,host:port"` 环境变量覆盖。
+
 ---
 
 ## 更新代码(已部署用户必读)

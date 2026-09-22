@@ -116,6 +116,12 @@ class MyConfig:
   - `provider.py` — crypto 市场专用: 标的维表(exchangeInfo + 24hr 成交额 Top N)与日K(klines, UTC 自然日)
   - 由 crypto 市场管道按市场路由直接调用(`daily_pipeline.run_market_sync`),
     不走全局「日K数据源」偏好；crypto 无复权/分钟K, 只声明 `daily` 数据集
+- **`backend/app/plugins/pytdx/`** — Python 插件(runtime: python), 通达信行情协议(沪深京A股)
+  - `provider.py` — 实时快照/日K/分钟K/除权因子/标的维表; 券商服务器测速选优、
+    列表分页空洞跳过(SH 第0页/SZ 6000-8999 恒空)、北交所维表回退项目 instruments
+  - `bridge.py` — availability 依赖检测(pytdx + cryptography<46)
+  - 依赖安装: `uv sync --extra pytdx` (Docker: `BACKEND_EXTRAS=pytdx`)
+  - ⚠️ 协议为社区逆向实现(无官方规范), 合规与稳定性风险自负; 选为实时源可解锁实时行情开关
 
 ## 路由机制(无需关心, 仅参考)
 

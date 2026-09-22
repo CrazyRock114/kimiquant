@@ -1,0 +1,14 @@
+# 通达信行情协议数据源插件（pytdx）
+# ⚠️ 合规提示: 本插件通过 pytdx 连接通达信公开行情服务器(TCP 7709),
+#    该协议无官方公开规范, 为社区逆向兼容实现, 使用可能受服务器侧策略限制。
+#    Docker 默认不打包(INCLUDE_PYTDX=0); 启用即视为使用者知悉并自行承担合规责任。
+#    开发模式安装依赖: cd backend && uv pip install "pytdx>=1.72" "cryptography<46"
+
+name: pytdx
+display_name: "通达信 (pytdx)"
+runtime: python
+entry: app.plugins.pytdx.provider:PytdxProvider
+check: app.plugins.pytdx.bridge:availability
+datasets: [daily, realtime, minute, adj_factor]
+description: "通达信行情协议(沪深京A股): 实时快照/日K/分钟K/除权, 免 Key。⚠️ 协议为社区逆向实现(无官方规范), 存在合规与稳定性风险, 仅覆盖 A 股。选为实时源可解锁实时行情开关。"
+install_hint: "开发模式: cd backend && uv sync --extra pytdx; Docker: BACKEND_EXTRAS=pytdx"
