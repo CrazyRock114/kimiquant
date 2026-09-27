@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from typing import ClassVar
 
 import httpx
@@ -190,8 +190,14 @@ class BinanceProvider:
         return pl.DataFrame(rows)
 
     def _fetch_klines(self, symbol: str, pair: str, start_ms: int, end_ms: int) -> list[dict]:
-        """单交易对翻页拉 1d klines（每页最多 KLINE_LIMIT 根）。"""
+        """单交易对翻页拉 1d klines（每页最多 KLINE_LIMIT 根）。
+
+        丢弃未完结的当日 bar：币安最后一根始终是进行中的 UTC 当日 K
+        （close=最新价、amount=当日起累计），若当完整日K 入库会让量比/涨跌幅/
+        新高统计系统性失真（部分日 vs 全日）。closeTime > 拉取时刻即未完结。
+        """
         out: list[dict] = []
+        now_ms = int(time.time() * 1000)
         cursor = start_ms
         while cursor <= end_ms:
             batch = self._get("/api/v3/klines", params={
@@ -203,6 +209,8 @@ class BinanceProvider:
             for k in batch:
                 # kline: [openTime, open, high, low, close, volume(base), closeTime,
                 #         quoteVolume(amount), trades, takerBuyBase, takerBuyQuote, ignore]
+                if k[6] > now_ms:
+                    continue  # 未完结 bar
                 out.append({
                     "symbol": symbol,
                     "date": datetime.fromtimestamp(k[0] / 1000, tz=UTC).date(),

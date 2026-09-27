@@ -71,6 +71,13 @@ class MatcherConfig:
     score_max: float | None = None
     initial_capital: float = 1_000_000.0
     position_sizing: Literal["equal", "score_weight"] = "equal"
+    # 交易规则（来自 app.markets 市场注册表）:
+    # lot_size 为每手单位数(cn/hk=100, us=1)；allow_fractional=True 时（加密货币）
+    # 不按手取整、允许零碎数量成交, 仅受最小名义金额约束。
+    # t_plus: 0=T+0(允许当日退出/当日卖出后回补), 1=T+1(A股)。
+    lot_size: int = 100
+    allow_fractional: bool = False
+    t_plus: int = 1
     # 分钟K精确成交: 开启后, 信号触发日的成交价用当日分钟K优化
     # (有参考线→穿越价, 无参考线→VWAP)。数据缺失时降级为日K口径。
     minute_fill: bool = False
@@ -1751,6 +1758,9 @@ class BacktestEngine:
         peak = cash
         max_positions = max(int(config.max_positions), 0)
         max_exposure_pct = min(max(float(config.max_exposure_pct), 0.0), 1.0)
+        lot_size = max(int(config.lot_size or 100), 1)
+        allow_fractional = bool(config.allow_fractional)
+        t_plus = int(config.t_plus)
         positions: dict[int, dict] = {}
         last_close = np.full(asset_count, np.nan, dtype=np.float64)
         trades: list[TradeRecord] = []
@@ -1994,7 +2004,8 @@ class BacktestEngine:
 
             for asset_id in list(positions):
                 pos = positions.get(asset_id)
-                if pos is None or pos.get("pending_exit_reason") or pos["entry_date"] == date_text:
+                # T+1 市场买入当日不可卖出；T+0(港美股/加密)允许当日退出
+                if pos is None or pos.get("pending_exit_reason") or (t_plus >= 1 and pos["entry_date"] == date_text):
                     continue
                 if not matrix.tradable[time_id, asset_id] or pos["entry_price"] <= 0:
                     continue
@@ -2056,7 +2067,8 @@ class BacktestEngine:
                     asset = int(asset_id)
                     if asset in positions:
                         continue
-                    if asset in sold_today:
+                    # T+1 市场当日卖出后不可当日回补；T+0 允许
+                    if asset in sold_today and t_plus >= 1:
                         _count("buy_same_day_reentry")
                         continue
                     ok, blocked = _can_buy(time_id, asset)
@@ -2104,11 +2116,18 @@ class BacktestEngine:
                             entry_price = _refill_price(
                                 time_id, asset_id, "buy", float(entry_prices[time_id, asset_id])
                             )
-                            shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
+                            if allow_fractional:
+                                # 加密货币: 不按手取整, 仅受最小名义金额约束(防尘)
+                                shares = allocation / (entry_price * (1 + buy_cost_pct))
+                                if shares * entry_price < 10.0:
+                                    _count("buy_lot_size")
+                                    continue
+                            else:
+                                shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / lot_size) * lot_size
+                                if shares <= 0:
+                                    _count("buy_lot_size")
+                                    continue
                             entry_value = shares * entry_price * (1 + buy_cost_pct)
-                            if shares <= 0:
-                                _count("buy_lot_size")
-                                continue
                             if entry_value > cash + 1e-6:
                                 _count("buy_cash")
                                 continue
@@ -2127,7 +2146,7 @@ class BacktestEngine:
                                 "entry_price": entry_price,
                                 "entry_value": entry_value,
                                 "shares": shares,
-                                "lots": shares / 100,
+                                "lots": shares if allow_fractional else shares / lot_size,
                                 "position_pct": entry_value / equity_before if equity_before > 0 else 0.0,
                                 "entry_score": entry_score,
                                 "max_high": entry_price,
@@ -2294,6 +2313,9 @@ class BacktestEngine:
         peak = cash
         max_positions = max(int(config.max_positions), 0)
         max_exposure_pct = min(max(float(getattr(config, "max_exposure_pct", 1.0)), 0.0), 1.0)
+        lot_size = max(int(getattr(config, "lot_size", 100) or 100), 1)
+        allow_fractional = bool(getattr(config, "allow_fractional", False))
+        t_plus = int(getattr(config, "t_plus", 1))
         score_min = getattr(config, "score_min", None)
         score_max = getattr(config, "score_max", None)
         positions: dict[str, dict] = {}
@@ -2530,7 +2552,8 @@ class BacktestEngine:
                 pos = positions.get(sym)
                 if pos is None or pos.get("pending_exit_reason"):
                     continue
-                if pos.get("entry_date") == d_str:
+                # T+1 市场买入当日不可卖出；T+0(港美股/加密)允许当日风控退出
+                if t_plus >= 1 and pos.get("entry_date") == d_str:
                     continue
                 idx = row_by_symbol.get(sym)
                 if idx is None or pos["entry_price"] <= 0:
@@ -2596,7 +2619,8 @@ class BacktestEngine:
                 sym = str(panel_symbols[idx])
                 if sym in positions:
                     continue
-                if sym in sold_today:
+                # T+1 市场当日卖出后不可当日回补；T+0 允许
+                if sym in sold_today and t_plus >= 1:
                     _count("buy_same_day_reentry")
                     continue
                 ok, block_reason = _can_buy(idx)
@@ -2652,11 +2676,18 @@ class BacktestEngine:
                     _count("buy_exposure")
                     continue
                 entry_price = _refill_price(idx, "buy", float(entry_prices[idx]))
-                shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
+                if allow_fractional:
+                    # 加密货币: 不按手取整, 仅受最小名义金额约束(防尘)
+                    shares = allocation / (entry_price * (1 + buy_cost_pct))
+                    if shares * entry_price < 10.0:
+                        _count("buy_lot_size")
+                        continue
+                else:
+                    shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / lot_size) * lot_size
+                    if shares <= 0:
+                        _count("buy_lot_size")
+                        continue
                 entry_value = shares * entry_price * (1 + buy_cost_pct)
-                if shares <= 0:
-                    _count("buy_lot_size")
-                    continue
                 if entry_value > cash + 1e-6:
                     _count("buy_cash")
                     continue
@@ -2673,7 +2704,7 @@ class BacktestEngine:
                     "entry_price": entry_price,
                     "entry_value": entry_value,
                     "shares": shares,
-                    "lots": shares / 100,
+                    "lots": shares if allow_fractional else shares / lot_size,
                     "position_pct": entry_value / account_equity_before_buy if account_equity_before_buy > 0 else 0.0,
                     "entry_score": _score,
                     "max_high": entry_price,

@@ -103,13 +103,19 @@ def market_data_recap(request: Request, market: str = Query("hk", description="h
     t = ov.get("trend") or {}
     l = ov.get("limit") or {}
     e = ov.get("emotion") or {}
+    # 口径声明: crypto 的「市场」实际是币安 USDT 现货成交额 Top 200 且按 UTC 自然日分区,
+    # 不写清会被误读为全市场/北京时间口径
+    caliber = "口径: 币安 USDT 现货成交额 Top 200 · UTC 自然日 · 金额为 USDT" if market == "crypto" \
+        else f"口径: {market.upper()} 全标的池 · 金额为当地货币"
+    universe_word = "标的池" if market == "crypto" else "全市场"
     lines = [
         f"## {market.upper()}市场数据复盘（{ov['as_of']}）",
+        f"*{caliber}*",
         "",
-        f"**市场情绪**: {e.get('label')}（{e.get('score')} 分）",
+        f"**市场情绪**: {e.get('label')}" + (f"（{e.get('score')} 分）" if e.get("score") is not None else ""),
         "",
         "### 涨跌概况",
-        f"- 全市场 {b.get('total')} 只：上涨 {b.get('up')} 只（{b.get('up_pct', 0):.1f}%）、下跌 {b.get('down')} 只、平均涨跌 {b.get('avg_pct', 0) * 100:+.2f}%",
+        f"- {universe_word} {b.get('total')} 只：上涨 {b.get('up')} 只（{b.get('up_pct', 0):.1f}%）、下跌 {b.get('down')} 只、平均涨跌 {b.get('avg_pct', 0) * 100:+.2f}%",
         f"- 涨超 3%：{b.get('strong_up', 0)} 只；跌超 3%：{b.get('strong_down', 0)} 只",
         "",
         "### 强度",

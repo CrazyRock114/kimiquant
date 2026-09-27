@@ -596,6 +596,12 @@ class TestCryptoMarket:
             ("BTCUSDT.CRYPTO", "BTCUSDT.CRYPTO"),  # 幂等
             ("BTC-USDT", "BTCUSDT.CRYPTO"),
             ("btc/usdt", "BTCUSDT.CRYPTO"),
+            ("1000PEPE-USDT", "1000PEPEUSDT.CRYPTO"),  # 含数字的币对也按 quote 端识别
+            ("BTCUSDT", "BTCUSDT.CRYPTO"),  # 裸币安交易对(全字母+计价资产结尾)
+            ("DOGEUSDC", "DOGEUSDC.CRYPTO"),
+            ("BRK-B", "BRK-B.US"),       # 美股 B 类股不能被误判成 crypto
+            ("HEI-A", "HEI-A.US"),       # 美股 A 类股
+            ("AAPL", "AAPL.US"),         # 普通美股不受影响
         ],
     )
     def test_normalize_symbol_crypto(self, raw, expected):

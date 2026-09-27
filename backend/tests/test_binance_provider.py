@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 
 import httpx
 import polars as pl
@@ -212,3 +212,26 @@ def test_provider_capabilities_declared():
         assert "minute" not in p.config.datasets      # 一期不接分钟K
     finally:
         p.close()
+
+
+# ── 未完结 bar 过滤 ────────────────────────────────────────────
+
+
+def test_get_daily_drops_unfinished_current_bar(provider):
+    """进行中的 UTC 当日 bar(closeTime > now)必须丢弃, 不能当完整日K 入库。"""
+    import time
+
+    future_close_ms = int(time.time() * 1000) + 86_400_000  # 明天才收盘
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[
+            _kline(_ms(date(2026, 9, 1))),          # 已完结
+            [int(time.time() * 1000) - 3600_000, "100", "101", "99", "100.5", "10",
+             future_close_ms, "1000", "5", "0", "0", "0"],  # 未完结
+        ])
+
+    _mock_client(provider, handler)
+    df = provider.get_daily(["BTCUSDT.CRYPTO"],
+                            datetime(2026, 9, 1), datetime(2026, 9, 3))
+    assert df.height == 1
+    assert df["date"].to_list() == [date(2026, 9, 1)]

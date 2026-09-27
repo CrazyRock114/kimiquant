@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.markets import MARKET_CN, stamp_tax_double_sided, stamp_tax_for
+from app.markets import MARKET_CN, MARKET_CRYPTO, stamp_tax_double_sided, stamp_tax_for
 from app.services.backtest import (
     BacktestConfig,
     BacktestService,
@@ -353,7 +353,7 @@ def _market_default_fees(market: str) -> tuple[float, bool]:
 
     税率与是否双边收取统一取自 app.markets 市场注册表，不在此重复硬编码 ——
     否则改注册表不会传导到回测，两处口径会静默分叉。
-    当前口径: A 股 0.05% 仅卖出；港股 0.1% 买卖双边；美股无印花税。
+    当前口径: A 股 0.05% 仅卖出；港股 0.1% 买卖双边；美股/crypto 无印花税。
 
     未知市场回落到 A 股: 回落到"有成本"比回落到"零成本"安全，后者会让回测
     结果偏乐观。
@@ -363,6 +363,17 @@ def _market_default_fees(market: str) -> tuple[float, bool]:
         return stamp_tax_for(market), stamp_tax_double_sided(market)
     except ValueError:
         return stamp_tax_for(MARKET_CN), stamp_tax_double_sided(MARKET_CN)
+
+
+def _market_default_commission(market: str) -> float | None:
+    """按市场返回默认佣金率（未显式指定时）；None 表示沿用引擎默认。
+
+    crypto: 币安现货挂单/吃单基准 0.1%, 引擎默认 0.02% 低估约 5 倍,
+    不显式修正会让高频信号策略在 crypto 上系统性偏乐观。
+    """
+    if market == MARKET_CRYPTO:
+        return 0.001
+    return None
 
 
 @router.post("/strategy/run")
@@ -382,6 +393,8 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
 
     default_stamp, double_sided = _market_default_fees(req.market)
     stamp_tax = req.stamp_tax_pct if req.stamp_tax_pct is not None else default_stamp
+    # 佣金: 未显式传时按市场取默认(crypto 币安基准 0.1%, 其余沿用引擎默认)
+    commission = req.commission_pct if req.commission_pct is not None else _market_default_commission(req.market)
 
     cfg = StrategyBacktestConfig(
         strategy_id=req.strategy_id,
@@ -394,7 +407,7 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
         entry_fill=req.entry_fill,
         exit_fill=req.exit_fill,
         fees_pct=req.fees_pct,
-        commission_pct=req.commission_pct,
+        commission_pct=commission,
         stamp_tax_pct=stamp_tax,
         stamp_tax_double_sided=double_sided,
         slippage_bps=req.slippage_bps,
@@ -418,8 +431,8 @@ def strategy_run(req: StrategyBacktestRequest, request: Request):
 
 # ── SSE 流式回测 (实时进度 + 可取消 + 支持重连) ───────────────────
 
-import time
 import hashlib
+import time
 
 
 class _BacktestJob:
@@ -605,11 +618,11 @@ async def strategy_stream(
                 entry_fill=entry_fill,
                 exit_fill=exit_fill,
                 fees_pct=fees_pct,
-                commission_pct=commission_pct,
-                # 未显式传印花税时按市场注册表取默认（港股双边 0.1% / 美股与 crypto 无）；
-                # A股保持 None 由引擎按无印花税口径处理（向后兼容既有行为）。
-                stamp_tax_pct=stamp_tax_pct if stamp_tax_pct is not None
-                else (None if market == MARKET_CN else default_stamp),
+                commission_pct=commission_pct if commission_pct is not None else _market_default_commission(market),
+                # 未显式传印花税时按市场注册表取默认（A股卖出 0.05% / 港股双边 0.1% / 美股与 crypto 无），
+                # 与 POST /strategy/run 口径一致——此前 A股在此传 None 按零印花税撮合,
+                # 与 run 端点 0.05% 口径矛盾, 两个入口结果不可比。
+                stamp_tax_pct=stamp_tax_pct if stamp_tax_pct is not None else default_stamp,
                 stamp_tax_double_sided=default_double_sided,
                 slippage_bps=slippage_bps,
                 max_positions=int(max_positions),

@@ -43,6 +43,7 @@ from app.indicators.pipeline import (
     LIMIT_SIGNAL_OUTPUTS,
     get_signal_dependencies,
 )
+from app.markets import allows_fractional, get_market, lot_size_for
 from app.strategy.engine import StrategyDataContext, StrategyDef, StrategyEngine
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
@@ -718,7 +719,7 @@ class StrategyBacktestService:
                     loaded = loader(child.strategy_id)
                     if isinstance(loaded, dict):
                         child_override = dict(loaded)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             child_params = self.strategy_engine.resolve_params(child_def, overrides=child_override)
             child_plan = resolver.resolve(
@@ -1224,6 +1225,10 @@ class StrategyBacktestService:
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
             minute_fill=config.minute_fill,
+            # 交易规则随市场注册表传导: 整手单位/零碎成交/T+N
+            lot_size=lot_size_for(config.market),
+            allow_fractional=allows_fractional(config.market),
+            t_plus=get_market(config.market).t_plus,
         )
         t_signal = time.perf_counter()
         selection_stats: dict[str, int | bool]
@@ -1450,7 +1455,7 @@ class StrategyBacktestService:
                 if expr is not None:
                     try:
                         basic_mask = panel.select(expr.alias("_basic"))["_basic"].fill_null(False).cast(pl.Boolean)
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.warning("basic_filter mask failed: %s", e)
                         return _err(f"基础过滤计算失败: {e}")
 

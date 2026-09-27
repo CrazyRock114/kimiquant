@@ -260,7 +260,7 @@ function useSealedDegrade(asOf: string, latestDate: string | undefined, sealedRe
 
 // ===== 单只股票卡片 =====
 
-const StockCard = React.memo(function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick, onDimensionClick }: {
+const StockCard = React.memo(function StockCard({ stock, extFields, direction, sealMode, monitored, monitorRule, onMonitorChange, hasDepth, onClick, onDimensionClick, isCn = true }: {
   stock: LimitLadderStock
   extFields: ExtFieldConfig
   direction: Direction
@@ -271,6 +271,7 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
   hasDepth: boolean
   onClick: (symbol: string, name?: string) => void
   onDimensionClick: (kind: DimensionKind, value: string, sourceField?: string) => void
+  isCn?: boolean
 }) {
   const [showMonitorMenu, setShowMonitorMenu] = useState(false)
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null)
@@ -302,22 +303,24 @@ const StockCard = React.memo(function StockCard({ stock, extFields, direction, s
   // 有五档盘口能力的用户正常设置; 无能力时保存按钮禁用 + 显示能力提示。
   return (
     <div className="relative group w-full">
-      {/* 监控设置按钮 (右上角): 不能嵌在卡片 button 内 */}
-      <button
-        onClick={e => {
-          e.stopPropagation()
-          setMenuAnchor(e.currentTarget.getBoundingClientRect())
-          setShowMonitorMenu(v => !v)
-        }}
-        title={monitored ? '封单监控已开启' : '开启封单监控'}
-        className={`absolute top-1 right-1 z-20 p-0.5 rounded transition-opacity cursor-pointer ${
-          monitored ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-70 text-muted hover:!opacity-100'
-        }`}
-      >
-        {monitored ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
-      </button>
+      {/* 监控设置按钮 (右上角): 不能嵌在卡片 button 内; 封单监控为 A 股专属, 非 cn 隐藏 */}
+      {isCn && (
+        <button
+          onClick={e => {
+            e.stopPropagation()
+            setMenuAnchor(e.currentTarget.getBoundingClientRect())
+            setShowMonitorMenu(v => !v)
+          }}
+          title={monitored ? '封单监控已开启' : '开启封单监控'}
+          className={`absolute top-1 right-1 z-20 p-0.5 rounded transition-opacity cursor-pointer ${
+            monitored ? 'opacity-100 text-amber-400' : 'opacity-0 group-hover:opacity-70 text-muted hover:!opacity-100'
+          }`}
+        >
+          {monitored ? <Bell className="h-3 w-3" /> : <BellOff className="h-3 w-3" />}
+        </button>
+      )}
       {/* 监控菜单 */}
-      {showMonitorMenu && menuAnchor && (
+      {isCn && showMonitorMenu && menuAnchor && (
         <MonitorMenu
           stock={stock}
           direction={direction}
@@ -875,8 +878,8 @@ function OverviewBar({ tiers, dateValue, onDateChange, filterKeys, bf, direction
   const cfg = { ...DEFAULT_BF, ...bf }
   const mainStatus = direction === 'down' ? 'limit_down' : 'limit_up'
   const brokenStatus = direction === 'down' ? 'recovery' : 'broken'
-  // 命中数: 涨停/跌停主状态(含无 status 兜底)
-  const limitUpCounts = tiers.map(t => t.stocks.filter(s => s.status === mainStatus || !s.status).length)
+  // 命中数: 涨停/跌停主状态(含无 status 兜底); 非 cn 状态为 high/volume/momentum, 直接用后端 tier.count
+  const limitUpCounts = tiers.map(t => isCn ? t.stocks.filter(s => s.status === mainStatus || !s.status).length : t.count)
   const maxCount = Math.max(...limitUpCounts, 1)
   const showBroken = (filterKeys.has('broken') || filterKeys.has('recovery')) && cfg.brokenShow
   const showFailed = filterKeys.has('failed') && cfg.failedShow
@@ -1052,7 +1055,8 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
   const showBroken = (filterKeys.has('broken') || filterKeys.has('recovery')) && cfg.brokenShow
   const showFailed = filterKeys.has('failed') && cfg.failedShow
 
-  const luCount = tier.stocks.filter(s => s.status === mainStatus || !s.status).length
+  // 非 cn 状态为 high/volume/momentum, 前端按 mainStatus 过滤会得 0, 直接用后端 tier.count
+  const luCount = isCn ? tier.stocks.filter(s => s.status === mainStatus || !s.status).length : tier.count
   const brCount = cfg.brokenCount ? tier.stocks.filter(s => s.status === brokenStatus).length : 0
   const faCount = cfg.failedCount ? tier.stocks.filter(s => s.status === 'failed').length : 0
 
@@ -1230,6 +1234,7 @@ function TierGroup({ tier, defaultOpen, extFields, filterKeys, bf, onStockClick,
                   hasDepth={hasDepth}
                   onClick={onStockClick}
                   onDimensionClick={onDimensionClick}
+                  isCn={isCn}
                 />
               ))}
             </div>
@@ -1696,8 +1701,9 @@ export function LimitUpLadder() {
               rawDown={data?.counts_raw?.down}
             />
             )}
-            {/* 涨跌停切换(胶囊式): 点击切换方向, 当前方向有背景 */}
-            <div className="flex items-center rounded-full bg-elevated/60 p-0.5">
+            {/* 涨跌停切换(胶囊式): 点击切换方向, 当前方向有背景; 非 cn 后端忽略 direction, 隐藏避免误导 */}
+            {isCn && (
+              <div className="flex items-center rounded-full bg-elevated/60 p-0.5">
               <button
                 onClick={() => direction !== 'up' && toggleDirection('up')}
                 className={`flex items-center gap-1 px-2.5 h-7 rounded-full text-xs tabular-nums transition-all ${
@@ -1720,7 +1726,8 @@ export function LimitUpLadder() {
                 <span>{isCn ? '跌停' : '新低'}</span>
                 <span>{data?.counts?.down ?? 0}</span>
               </button>
-            </div>
+              </div>
+            )}
           </div>
         }
         right={

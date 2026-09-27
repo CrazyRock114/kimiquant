@@ -22,8 +22,9 @@ function n(v: number | null | undefined) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-function scoreColor(v: number) {
+function scoreColor(v: number | null) {
   // A 股惯例: 强势=红, 弱式=绿
+  if (v == null) return '#9CA3AF'
   if (v >= 70) return '#F04438'
   if (v >= 55) return '#FB923C'
   if (v >= 45) return '#F59E0B'
@@ -296,16 +297,16 @@ function DistributionBars({ rows }: { rows: OverviewMarket['distribution'] }) {
   )
 }
 
-function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score: number }) {
+function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score: number | null }) {
   const size = 240
   const cx = size / 2
   const cy = size / 2
   const maxR = 78
   const color = scoreColor(score)
-  if (!radar.length) return <div className="flex h-52 items-center justify-center text-xs text-muted">暂无雷达数据</div>
+  if (!radar.length || radar.every(r => r.value == null)) return <div className="flex h-52 items-center justify-center text-xs text-muted">暂无雷达数据</div>
   const points = radar.map((r, i) => {
     const angle = -Math.PI / 2 + i * 2 * Math.PI / radar.length
-    const radius = maxR * Math.max(0, Math.min(100, r.value)) / 100
+    const radius = maxR * Math.max(0, Math.min(100, r.value ?? 0)) / 100
     return {
       ...r,
       x: cx + Math.cos(angle) * radius,
@@ -353,7 +354,7 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
         <polygon points={polygon} fill="url(#emotionRadarFill)" stroke={color} strokeWidth="2" />
         {points.map(p => <circle key={p.key} cx={p.x} cy={p.y} r="2.8" fill={color} stroke="hsl(var(--surface) / 0.9)" strokeWidth="1" />)}
         <circle cx={cx} cy={cy} r="29" fill="url(#emotionRadarCenter)" />
-        <text x={cx} y={cy + 7} textAnchor="middle" className="fill-foreground font-mono text-[24px] font-bold">{score}</text>
+        <text x={cx} y={cy + 7} textAnchor="middle" className="fill-foreground font-mono text-[24px] font-bold">{score ?? '—'}</text>
         {points.map(p => (
           <text key={`${p.key}-label`} x={p.lx} y={p.ly + 4} textAnchor="middle" className="fill-secondary text-[10px] font-medium">{p.label}</text>
         ))}
@@ -408,8 +409,10 @@ function MiniMetric({ label, value, cls = 'text-foreground' }: { label: string; 
   )
 }
 
-function StockList({ title, rows, mode, onStockClick }: {
+function StockList({ title, rows, mode, activeMetric = 'turnover', onStockClick }: {
   title: string; rows: MarketSnapshotRow[]; mode: 'gain' | 'loss' | 'amount' | 'active';
+  /** mode=active 时的数值口径: 换手率(A股) / 5日量比(非 cn, 与后端排序口径一致) */
+  activeMetric?: 'turnover' | 'vol_ratio';
   onStockClick?: (symbol: string, name?: string) => void;
 }) {
   return (
@@ -448,7 +451,9 @@ function StockList({ title, rows, mode, onStockClick }: {
                 </>
               ) : mode === 'active' ? (
                 <>
-                  <div className="font-mono text-[11px] text-accent">{fmtPrice(r.turnover_rate, 1)}%</div>
+                  <div className="font-mono text-[11px] text-accent">
+                    {activeMetric === 'vol_ratio' ? fmtPrice(r.vol_ratio_5d, 2) : `${fmtPrice(r.turnover_rate, 1)}%`}
+                  </div>
                   <div className={`font-mono text-[9px] ${pctClass(r.change_pct)}`}>{fmtStockPct(r.change_pct)}</div>
                 </>
               ) : (
@@ -545,6 +550,7 @@ export function Dashboard() {
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
   const { market } = useMarket()
+  const isCn = market === 'cn'
   const overview = useQuery({
     queryKey: QK.overviewMarket(selectedDate, market),
     queryFn: () => api.overviewMarket(selectedDate, market),
@@ -663,9 +669,16 @@ export function Dashboard() {
     )
   }
 
-  const score = data.emotion?.score ?? 50
+  const score = data.emotion?.score ?? null
   const strongUp = data.breadth.strong_up ?? 0
   const strongDown = data.breadth.strong_down ?? 0
+  // 非 cn 市场缺失字段返回 null — 显示「—」, 绝不用 0 伪装真值
+  const avgTurnoverTxt = data.activity.avg_turnover == null ? '—' : `${fmtPrice(data.activity.avg_turnover, 1)}%`
+  const volRatioTxt = data.activity.vol_ratio == null ? '—' : fmtPrice(data.activity.vol_ratio, 2)
+  const activitySub = [
+    data.activity.high_turnover != null ? `高换手 ${data.activity.high_turnover}` : null,
+    `放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`,
+  ].filter(Boolean).join(' · ')
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
   const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
@@ -686,6 +699,7 @@ export function Dashboard() {
           onStart={() => startFetch.mutate()}
           isTickflowProvider={isTickflowProvider}
           providerLabel={providerLabel}
+          isCn={isCn}
         />
       )}
       {/* 首次使用自动弹窗(同会话仅一次) */}
@@ -694,6 +708,7 @@ export function Dashboard() {
           <WelcomeFetchModal
             isTickflowProvider={isTickflowProvider}
             providerLabel={providerLabel}
+            isCn={isCn}
             onClose={() => setShowWelcomeModal(false)}
             onStart={() => {
               startFetch.mutate()
@@ -715,7 +730,7 @@ export function Dashboard() {
               background: `${scoreColor(score)}14`,
             }}
           >
-            {data.emotion.label} · {score}
+            {data.emotion.label} · {score ?? '—'}
           </span>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted">
@@ -729,6 +744,9 @@ export function Dashboard() {
             />
           ) : (
             <span className="font-mono text-secondary">—</span>
+          )}
+          {data.date_caliber === 'utc_day' && (
+            <span className="text-[9px] text-muted" title="日期按 UTC 自然日统计">(UTC)</span>
           )}
           <span className="flex items-center gap-1"><Timer className="h-3 w-3" />{quoteAge(data.quote_status?.quote_age_ms)}</span>
           <span className={quoteRunning ? 'text-accent' : 'text-warning'}>{quoteRunning ? '实时' : '非实时'}</span>
@@ -758,25 +776,31 @@ export function Dashboard() {
         {data.indices.map(item => <IndexTicker key={item.symbol} item={item} />)}
       </div>
 
-      <div className="mb-1.5 grid grid-cols-6 gap-1">
+      <div className={`mb-1.5 grid gap-1 ${isCn ? 'grid-cols-6' : 'grid-cols-5'}`}>
         <KpiCell label="个股涨 / 平 / 跌" value={<><span className="text-bull">{data.breadth.up}</span><span className="text-muted">/</span><span className="text-muted">{data.breadth.flat}</span><span className="text-muted">/</span><span className="text-bear">{data.breadth.down}</span></>} sub={`上涨率 ${data.breadth.up_pct.toFixed(1)}%`} />
         <KpiCell label="强势 / 弱势" value={<><span className="text-bull">{strongUp}</span><span className="text-muted">/</span><span className="text-bear">{strongDown}</span></>} sub="涨跌 ≥3%" />
-        <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
-        <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
-          const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
-          const stocks = top?.stocks ?? []
-          if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
-          return `梯队 ${data.limit.tiers.length}`
-        })()} tone="accent" />
-        <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={`均额 ${fmtBigNum(data.amount.avg)}`} />
-        <KpiCell label="换手 / 量比" value={`${fmtPrice(data.activity.avg_turnover, 1)}% / ${fmtPrice(data.activity.vol_ratio, 2)}`} sub={`高换手 ${data.activity.high_turnover} · 放量占比 ${fmtPrice(data.activity.high_vol_ratio, 1)}%`} tone="accent" />
+        {isCn ? (
+          <KpiCell label={<span className="inline-flex items-center gap-1">涨停 / 跌停<SealedBadge degraded={isSealedDegrade} hasDepth={hasDepth} isHistorical={false} sealedReady={sealedReady} sealedCountsUp={{ real: data.limit.limit_up, fake: data.limit.fake_up ?? 0, pending: 0 }} sealedCountsDown={{ real: data.limit.limit_down, fake: data.limit.fake_down ?? 0, pending: 0 }} rawUp={data.limit.limit_up + (data.limit.fake_up ?? 0)} rawDown={data.limit.limit_down + (data.limit.fake_down ?? 0)} invalidateKeys={['overview-market', 'limit-ladder']} /></span>} value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} sub={`封板率 ${(data.limit.seal_rate ?? 0).toFixed(0)}%`} />
+        ) : (
+          <KpiCell label="60日新高 / 60日新低" value={<><span className="text-bull">{data.limit.limit_up}</span><span className="text-muted">/</span><span className="text-bear">{data.limit.limit_down}</span></>} />
+        )}
+        {isCn && (
+          <KpiCell label="最高连板" value={`${data.limit.max_boards || 0}板`} sub={(() => {
+            const top = data.limit.tiers.find(t => t.boards === data.limit.max_boards)
+            const stocks = top?.stocks ?? []
+            if (stocks.length > 0 && stocks.length <= 3) return stocks.map(s => s.name || s.symbol).join(' · ')
+            return `梯队 ${data.limit.tiers.length}`
+          })()} tone="accent" />
+        )}
+        <KpiCell label="成交额" value={fmtBigNum(data.amount.total)} sub={data.amount.avg != null ? `均额 ${fmtBigNum(data.amount.avg)}` : undefined} />
+        <KpiCell label="换手 / 量比" value={`${avgTurnoverTxt} / ${volRatioTxt}`} sub={activitySub || undefined} tone="accent" />
       </div>
 
       <div className="grid grid-cols-1 gap-1.5 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <main className="min-w-0 space-y-1.5">
           <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-3">
             <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-              <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只`} />
+              <SectionTitle icon={BarChart3} title="涨跌分布 / 广度" hint={`${data.breadth.total}只${data.universe_note ? ` · ${data.universe_note}` : ''}`} />
               <DistributionBars rows={data.distribution} />
               <div className="mt-2">
                 <BreadthBar data={data.breadth} />
@@ -791,7 +815,7 @@ export function Dashboard() {
               className="rounded-card border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]"
               style={{ borderColor: `${scoreColor(score)}40` }}
             >
-              <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score}`} />
+              <SectionTitle icon={Sparkles} title="情绪雷达" hint={`情绪评分 ${score ?? '—'}`} />
               <EmotionRadar radar={data.radar} score={score} />
             </section>
 
@@ -810,11 +834,11 @@ export function Dashboard() {
               <div className="mt-1.5 border-t border-border pt-1.5">
                 <SectionTitle icon={Target} title="实用监控" hint="盘中观察" />
                 <div className="grid grid-cols-3 gap-1.5">
-                  <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" />
-                  <MiniMetric label="跌停" value={`${data.limit.limit_down ?? 0}`} cls="text-bear" />
+                  {isCn && <MiniMetric label="炸板" value={`${data.limit.broken ?? 0}`} cls="text-warning" />}
+                  {isCn && <MiniMetric label="跌停" value={`${data.limit.limit_down ?? 0}`} cls="text-bear" />}
                   <MiniMetric label="站上MA60" value={`${data.trend.above_ma60_pct.toFixed(0)}%`} cls="text-accent" />
                   <MiniMetric label="新高/新低" value={`${compactCount(data.trend.new_high)}/${compactCount(data.trend.new_low)}`} cls={data.trend.new_high >= data.trend.new_low ? 'text-bull' : 'text-bear'} />
-                  <MiniMetric label="高换手数" value={`${data.activity.high_turnover}`} cls="text-accent" />
+                  <MiniMetric label="高换手数" value={compactCount(data.activity.high_turnover)} cls="text-accent" />
                   <MiniMetric label="放量占比" value={`${fmtPrice(data.activity.high_vol_ratio, 1)}%`} cls="text-accent" />
                 </div>
               </div>
@@ -830,15 +854,17 @@ export function Dashboard() {
             <StockList title="涨幅榜" rows={data.top_gainers} mode="gain" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
             <StockList title="跌幅榜" rows={data.top_losers} mode="loss" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
             <StockList title="成交额榜" rows={data.turnover_leaders} mode="amount" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
-            <StockList title="活跃换手" rows={data.active_leaders} mode="active" onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
+            <StockList title={isCn ? '活跃换手' : '量比活跃'} rows={data.active_leaders} mode="active" activeMetric={isCn ? 'turnover' : 'vol_ratio'} onStockClick={(symbol, name) => setPreviewStock({symbol, name})} />
           </div>
         </main>
 
         <aside className="min-w-0 space-y-1.5">
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-            <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
-            <LadderMini limit={data.limit} />
-          </section>
+          {isCn && (
+            <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+              <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{isSealedDegrade && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
+              <LadderMini limit={data.limit} />
+            </section>
+          )}
           <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
@@ -876,7 +902,7 @@ export function Dashboard() {
 // ===== 无数据常驻引导卡片: 一键触发盘后管道获取行情数据(无 Key 也可) =====
 function FetchDataCard({
   isFetching, isStarting, fetchFailed, stage, fetchPct, onStart,
-  isTickflowProvider, providerLabel,
+  isTickflowProvider, providerLabel, isCn,
 }: {
   isFetching: boolean
   isStarting: boolean
@@ -886,6 +912,7 @@ function FetchDataCard({
   onStart: () => void
   isTickflowProvider: boolean
   providerLabel: string
+  isCn: boolean
 }) {
   const stageText = stage ? (STAGE_LABELS[stage] ?? stage) : '正在同步行情数据…'
   return (
@@ -897,9 +924,13 @@ function FetchDataCard({
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-foreground">当前暂无数据</div>
           <p className="mt-1 text-xs text-secondary leading-relaxed">
-            首次使用需获取行情数据后才能查看看板。{isTickflowProvider
-              ? '可通过 TickFlow 免费服务器拉取近 1 年全 A 股日K'
-              : `将从当前数据源「${providerLabel}」拉取近 1 年全 A 股日K`}(约 5500 只),预计 1-3 分钟,期间可继续浏览其他页面。
+            首次使用需获取行情数据后才能查看看板。{isCn
+              ? `${isTickflowProvider
+                ? '可通过 TickFlow 免费服务器拉取近 1 年全 A 股日K'
+                : `将从当前数据源「${providerLabel}」拉取近 1 年全 A 股日K`}(约 5500 只)`
+              : isTickflowProvider
+                ? '可通过 TickFlow 免费服务器拉取当前市场日K数据'
+                : `将从当前数据源「${providerLabel}」拉取当前市场日K数据`},预计 1-3 分钟,期间可继续浏览其他页面。
           </p>
           {isTickflowProvider && (
             <p className="mt-1 text-[11px] text-warning/80 leading-relaxed">
@@ -962,10 +993,11 @@ function FetchDataCard({
 
 // ===== 首次使用自动弹窗: 询问用户后触发盘后管道 =====
 function WelcomeFetchModal({
-  onClose, onStart, isTickflowProvider, providerLabel,
+  onClose, onStart, isTickflowProvider, providerLabel, isCn,
 }: {
   isTickflowProvider: boolean
   providerLabel: string
+  isCn: boolean
   onClose: () => void
   onStart: () => void
 }) {
@@ -982,9 +1014,13 @@ function WelcomeFetchModal({
         </motion.div>
         <h3 className="mt-4 text-base font-semibold text-foreground">首次使用,需先获取行情数据</h3>
         <p className="mt-2 text-xs text-secondary leading-relaxed">
-          {isTickflowProvider
-            ? '可通过 TickFlow 免费服务器拉取近 1 年全 A 股日K'
-            : `将从当前数据源「${providerLabel}」拉取近 1 年全 A 股日K`}(约 5500 只),预计 1-3 分钟。
+          {isCn
+            ? `${isTickflowProvider
+              ? '可通过 TickFlow 免费服务器拉取近 1 年全 A 股日K'
+              : `将从当前数据源「${providerLabel}」拉取近 1 年全 A 股日K`}(约 5500 只)`
+            : isTickflowProvider
+              ? '可通过 TickFlow 免费服务器拉取当前市场日K数据'
+              : `将从当前数据源「${providerLabel}」拉取当前市场日K数据`},预计 1-3 分钟。
           同步期间可继续浏览其他页面,完成后看板自动刷新。
         </p>
         {isTickflowProvider && (

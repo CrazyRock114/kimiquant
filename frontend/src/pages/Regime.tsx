@@ -23,6 +23,7 @@ import { QK } from '@/lib/queryKeys'
 import { useChartTheme } from '@/lib/theme'
 import { toast } from '@/components/Toast'
 import { useMarket, marketLabel } from '@/lib/market'
+import { MarketNotSupportedHint } from '@/components/MarketNotSupported'
 import { Modal } from '@/components/Modal'
 import { cn } from '@/lib/cn'
 
@@ -670,7 +671,7 @@ export function Regime() {
           <Activity className="h-5 w-5 text-accent" />
           <h1 className="text-base font-semibold text-foreground">{isCn ? '市场环境' : `${marketLabel(market)} · 市场环境`}</h1>
           <span className="text-xs text-muted">
-            {view === 'phase' ? '涨停情绪 · 市场阶段 · 主线脉络' : '每日环境状态 · 赚钱效应 · 趋势分析'}
+            {view === 'phase' ? (isCn ? '涨停情绪 · 市场阶段 · 主线脉络' : '情绪与动量') : '每日环境状态 · 赚钱效应 · 趋势分析'}
           </span>
           <div className="ml-auto flex items-center gap-2">
             {/* 时间范围按钮组 */}
@@ -893,6 +894,11 @@ export function Regime() {
         </div>
       )}
 
+      {/* ── 阶段 × 主线 / 主线排行: 接口不带 market 参数, 数据实为 A 股口径, 非 cn 用提示替代 ── */}
+      {!isCn ? (
+        <MarketNotSupportedHint pageName="阶段 × 主线 · 主线排行" reason="主线基于 A 股涨停梯队计算" showGuide={false} />
+      ) : (
+      <>
       {/* ── 阶段 × 主线 (什么阶段走什么主升) ── */}
       {segments.length > 0 && (
         <div className={cn(cardCls, 'p-3')}>
@@ -1022,6 +1028,8 @@ export function Regime() {
           </table>
         </div>
       </div>
+      </>
+      )}
 
       </div>{/* /情绪周期 tab */}
 

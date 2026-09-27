@@ -123,9 +123,23 @@ def test_get_realtime_mapping(provider, monkeypatch):
     assert records[1]["change_pct"] == pytest.approx((11.71 - 11.73) / 11.73)
 
 
+def test_get_realtime_suspended_zero_price_filtered(provider, monkeypatch):
+    """停牌股(price=0)被过滤: 不产出 -100% 涨跌幅与零价记录, 下游保持旧数据。"""
+    monkeypatch.setattr(provider, "_load_universe",
+                        lambda: [(1, "600000", "停牌股"), (0, "000001", "正常股")])
+    _attach(provider, FakeAPI(quotes=[
+        _quote(1, "600000", price=0, last_close=0),          # 停牌
+        _quote(0, "000001", price=11.71, last_close=11.73),  # 正常
+    ]))
+    records = provider.get_realtime()
+    assert len(records) == 1
+    assert records[0]["symbol"] == "000001.SZ"
+
+
 def test_get_realtime_prev_close_zero_no_division_error(provider, monkeypatch):
+    """prev_close=0 但现价非 0(新股/数据异常)时 change_pct 兜底为 0 而非除零。"""
     monkeypatch.setattr(provider, "_load_universe", lambda: [(1, "600000", "X")])
-    _attach(provider, FakeAPI(quotes=[_quote(1, "600000", price=0, last_close=0)]))
+    _attach(provider, FakeAPI(quotes=[_quote(1, "600000", price=5.0, last_close=0)]))
     rec = provider.get_realtime()[0]
     assert rec["change_pct"] == 0.0
     assert rec["amplitude"] == 0.0
@@ -311,3 +325,28 @@ def test_universe_falls_back_to_parquet_when_tdx_incomplete(provider, monkeypatc
     _attach(provider, FakeAPI(sec_list={1: [{"code": "600000", "name": "浦发银行"}]}))
     universe = provider._load_universe()
     assert len(universe) == 3600  # 整体回退到项目维表
+
+
+# ── get_minute: tz 归一化与 freq 校验 ─────────────────────────
+
+
+def test_get_minute_accepts_tz_aware_range(provider):
+    """tz-aware 的 start/end(调用方 fetch_minute_single 传 CN_TZ)不再静默空数据。"""
+    from app.markets import CN_TZ
+
+    _attach(provider, FakeAPI(bars=[_bar(d=22, hh=14, mm=56, vol=50.0)]))
+    df = provider.get_minute(
+        ["600000.SH"],
+        datetime(2026, 9, 22, 14, 0, tzinfo=CN_TZ),
+        datetime(2026, 9, 22, 15, 0, tzinfo=CN_TZ),
+    )
+    assert df.height == 1
+    assert df["datetime"][0] == datetime(2026, 9, 22, 14, 56)
+
+
+def test_get_minute_unknown_freq_raises(provider):
+    """未知周期必须报错而非静默映射到 1 分钟(mislabeled data)。"""
+    _attach(provider, FakeAPI(bars=[_bar()]))
+    with pytest.raises(ValueError):
+        provider.get_minute(["600000.SH"], datetime(2026, 9, 22), datetime(2026, 9, 22),
+                            freq="15m")

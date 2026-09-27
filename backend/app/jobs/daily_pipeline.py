@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import date as _date
 from pathlib import Path
 
 import polars as pl
@@ -19,9 +20,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.indicators.pipeline import run_pipeline, run_pipeline_market
 from app.config import settings
-from app.services import index_sync, instrument_sync, kline_sync, preferences as _prefs
+from app.indicators.pipeline import run_pipeline, run_pipeline_market
+from app.services import index_sync, instrument_sync, kline_sync
+from app.services import preferences as _prefs
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.pools import DEMO_SYMBOLS, get_pool
 from app.tickflow.repository import KlineRepository
@@ -44,7 +46,7 @@ class PipelineStageError(RuntimeError):
         super().__init__("盘后管道部分阶段失败: " + "; ".join(errors))
 
 
-def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:  # noqa: ARG001
+def _noop(stage: str, pct: int, msg: str, **kwargs) -> None:
     pass
 
 
@@ -68,7 +70,7 @@ def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
             all_a = get_pool("CN_Equity_A", refresh=True)
             if all_a:
                 return sorted(all_a)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("CN_Equity_A pool unavailable, fallback: %s", e)
 
     # Free 用户兜底: instruments parquet + watchlist + demo
@@ -80,7 +82,7 @@ def _resolve_universe(capset: CapabilitySet, repo=None) -> list[str]:
         try:
             inst = pl.read_parquet(inst_path, columns=["symbol"])
             base.update(inst["symbol"].to_list())
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("instruments supplement failed: %s", e)
     # 过滤自选兜底里的指数 symbol (指数日K走独立 kline_index_* 存储,
     # 进股票池会污染 kline_daily/kline_minute)。ETF 刻意保留 (既有行为)。
@@ -118,7 +120,8 @@ def run_market_sync(
 
     返回: {"universe": n, "daily_rows": n, "enriched_rows": n, "skipped": [...]}
     """
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
 
     emit = on_progress or _noop
     skipped: list[str] = []
@@ -134,7 +137,7 @@ def run_market_sync(
                 _invalidate("instruments")
                 repo.clear_cache()
                 repo.refresh_cache()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("crypto 维表同步失败: %s", e)
     inst = repo.get_instruments_asset("stock", market)
     universe = sorted(inst["symbol"].to_list()) if not inst.is_empty() and "symbol" in inst.columns else []
@@ -160,7 +163,7 @@ def run_market_sync(
         try:
             df = provider.get_daily(universe, start_time=start, end_time=end,
                                     on_chunk_done=_chunk)
-        except Exception as e:  # noqa: BLE001
+        except Exception:
             logger.exception("crypto 日K拉取失败")
             skipped.append("daily")
             df = pl.DataFrame()
@@ -177,7 +180,8 @@ def run_market_sync(
     if df.is_empty():
         emit("sync_daily", 45, f"{market} 日K 未获取到数据")
         return {"universe": len(universe), "daily_rows": 0, "enriched_rows": 0, "skipped": skipped}
-    daily_rows = repo.append_daily(df, market=market)
+    repo.append_daily(df, market=market)
+    daily_rows = df.height  # append_daily 无返回值, 行数以写入 df 为准
     emit("sync_daily", 45, f"{market} 日K 写入 {daily_rows} 行")
     _invalidate(f"kline_daily_{market}")
 
@@ -185,7 +189,7 @@ def run_market_sync(
     emit("compute_enriched", 60, f"计算 {market} enriched 指标…")
     try:
         enriched_rows = run_pipeline_market(market, repo.store.data_dir)
-    except Exception as e:  # noqa: BLE001
+    except Exception:
         logger.exception("%s enriched 计算失败", market)
         skipped.append("enriched")
         enriched_rows = 0
@@ -193,8 +197,8 @@ def run_market_sync(
 
     # 刷新 DuckDB 视图（新 parquet 已写入）
     try:
-        repo.store._register_views()  # noqa: SLF001
-    except Exception as e:  # noqa: BLE001
+        repo.store._register_views()
+    except Exception as e:
         logger.warning("refresh views failed: %s", e)
     emit("done", 100, f"{market} 管道完成")
     return {"universe": len(universe), "daily_rows": daily_rows,
@@ -238,7 +242,9 @@ def run_now(
     #   付费档 + 今天有数据 → 实时行情接口拉一次覆写（1请求全市场）
     #   有历史数据 → batch K-line API 补齐缺口
     #   无任何数据 → batch K-line API 拉首次 1 年
-    from datetime import date as _date, timedelta as _td, datetime as _dt
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
     latest_daily = repo.latest_daily_date()
     today = _date.today()
     today_exists = latest_daily and latest_daily >= today
@@ -265,7 +271,7 @@ def run_now(
                     "integrity: 检测到 %d 个不完整分区(%s), 本次管道改走范围拉取修复",
                     len(integrity_issues), data_integrity.describe_issues(integrity_issues),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("integrity scan failed (soft, 按无坏数据处理): %s", e)
             integrity_issues = []
     # 日K范围拉取的起点(分支3补缺口/分支4首次/数据修正); 实时增量/跳过时为 None。
@@ -372,7 +378,7 @@ def run_now(
             )
             if pruned:
                 logger.info("integrity: 已删除 %d 个待重算的 enriched 分区 (≥ %s)", pruned, repair_start)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("enriched prune failed (soft): %s", e)
 
 
@@ -387,7 +393,7 @@ def run_now(
             if lagging_symbols:
                 logger.warning("日K新鲜度: %d 只标的落后 >3 日 (停牌/退市/拉取失败; 样例: %s)",
                                len(lagging_symbols), lagging_symbols[:10])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("laggard detection failed: %s", e)
             stage_errors.append(f"laggard detection: {e}")
 
@@ -597,7 +603,7 @@ def run_now(
                         )
                         etf_adj_symbols = len(affected_etfs)
                         emit("sync_index", 88, f"ETF 除权因子完成,{etf_adj_symbols} 只")
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:
                         logger.warning("ETF adj_factor skipped: %s", e)
                         stage_errors.append(f"ETF adj_factor: {e}")
                 etf_dir = repo.store.data_dir / "kline_etf_enriched"
@@ -632,7 +638,7 @@ def run_now(
                 f"同步完成,指数 {index_count} 只/{written_index_daily} 行, ETF {etf_count} 只/{written_etf_daily} 行"
                 + (f", ETF复权 {etf_adj_symbols} 只" if etf_adj_symbols else ""),
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("sync_index/etf failed: %s", e)
             emit("sync_index", 89, f"指数/ETF同步失败:{e}")
             stage_errors.append(f"index/etf sync: {e}")
@@ -682,8 +688,8 @@ def run_now(
     else:
         try:
             emit("compute_regime", 90, "计算市场环境…")
-            from app.services import regime_builder
             from app.api.regime import invalidate_regime_cache
+            from app.services import regime_builder
             new_regime = regime_builder.compute_regime_incremental(repo, repo.store.data_dir)
             regime_days = new_regime.height if not new_regime.is_empty() else 0
             if regime_days:
@@ -697,7 +703,7 @@ def run_now(
                     _push_phase_change_alert(repo.store.data_dir)
                 except Exception as e:
                     logger.warning("phase change alert failed (soft): %s", e)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("compute_regime failed (soft): %s", e)
             stage_errors.append(f"compute_regime: {e}")
             skipped.append("regime")
@@ -790,7 +796,7 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
             f"CREATE OR REPLACE VIEW {name} AS "
             f"SELECT * FROM read_parquet('{path}', union_by_name=true)"
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("refresh view %s failed: %s", name, e)
 
 
@@ -807,7 +813,7 @@ def _refresh_instruments_view(repo: KlineRepository) -> None:
             f"CREATE OR REPLACE VIEW instruments AS "
             f"SELECT * FROM read_parquet('{d}/instruments/**/*.parquet', union_by_name=true)"
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("refresh instruments view failed: %s", e)
 
 
@@ -845,7 +851,12 @@ def _run_tracked(fn, job_label: str) -> bool:
     重任务执行槽: 再挡一层僵尸并发(reap 后线程仍活时不得并行写 parquet)。
     返回 True 仅表示任务已成功并且执行槽已释放。
     """
-    from app.services.pipeline_jobs import JobCancelledError, job_store, release_run_slot, try_acquire_run_slot
+    from app.services.pipeline_jobs import (
+        JobCancelledError,
+        job_store,
+        release_run_slot,
+        try_acquire_run_slot,
+    )
 
     job_id, is_new = job_store.create()
     if not is_new:
@@ -910,8 +921,8 @@ async def _run_scheduled_review(repo) -> None:
     import json
 
     try:
-        from app.services import market_recap_reports
         from app import secrets_store as ss
+        from app.services import market_recap_reports
 
         # AI Key 未配置时跳过(避免每日报错刷日志)
         if not ss.get_ai_key():
@@ -951,7 +962,7 @@ async def _run_scheduled_review(repo) -> None:
         # 推送到飞书(可选): 运行时读取配置, 用户改设置下次触发即生效。
         # 失败静默降级, 不影响已归档的报告。
         _maybe_push_review(content, meta)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("scheduled review failed: %s", e)
         # 兜底: 异常时通知前端停止「生成中」状态, 避免页面卡在 streaming
         try:
@@ -962,7 +973,7 @@ async def _run_scheduled_review(repo) -> None:
                 qs.push_review_event(_json.dumps(
                     {"type": "error", "message": "复盘生成异常,请稍后手动重试"},
                     ensure_ascii=False))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -974,6 +985,7 @@ async def _stream_review_with_retry(repo, quote_service, depth_service) -> tuple
     """
     import asyncio
     import json
+
     from app.services.market_recap import recap_market_stream
 
     max_attempts = 3  # 初次 + 2 次重试
@@ -1007,7 +1019,7 @@ async def _stream_review_with_retry(repo, quote_service, depth_service) -> tuple
             # 流自然结束(无 done 事件)且有内容, 视为成功
             if content_parts and not failed:
                 return "".join(content_parts), last_meta
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # LLM 断流等异常(httpx.RemoteProtocolError)落到这里
             failed = True
             logger.warning("scheduled review stream exception (attempt %d/%d): %s",
@@ -1067,7 +1079,7 @@ def _maybe_push_review(content: str, meta: dict) -> None:
                 )
                 logger.info("review push(wecom) %s", "sent" if ok else "failed")
             # 未来更多渠道在此追加分支
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("review push error: %s", e)
 
 
@@ -1194,7 +1206,7 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
                     "能力集变化: %d → %d capabilities (档位=%s)。Key 过期/续费或端点波动, "
                     "已热更新 app.state.capabilities。", old_n, new_n, tier_label(),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("周期能力重探失败(保留现有能力集): %s", e)
 
     scheduler.add_job(

@@ -123,7 +123,7 @@ def _index_quotes(repo, quote_service, as_of: date | None = None) -> list[dict]:
                 """,
                 [*CORE_INDEX_SYMBOLS, as_of, as_of],
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             db_rows = []
         for symbol, dt, last_price, prev_close in db_rows:
             change_amount = None
@@ -190,9 +190,9 @@ def _read_ext_rows(data_dir, config: ExtConfig, dimension_field: str) -> list[di
     except TypeError:
         try:
             df = pl.read_parquet(files)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     if df.is_empty() or dimension_field not in df.columns:
         return []
@@ -606,12 +606,14 @@ def build_market_overview_market(
     market: str,
     as_of: date | None = None,
 ) -> dict:
-    """港美股市场总览：字段与 A 股 build_market_overview 对齐，语义按市场适配。
+    """港美股/crypto 市场总览：字段与 A 股 build_market_overview 对齐，语义按市场适配。
 
     差异:
       - 无涨停/连板概念 → limit 字段改为「60日新高/新低」统计。
       - 无同花顺概念/行业扩展表 → concept_rank / industry_rank 为空。
-      - SDK 不提供成交额/换手率 → amount 为 0，activity 只保留量比。
+      - 成交额: hk/us 的 SDK 不提供(恒 0) → amount/turnover 字段返回 None(缺失),
+        crypto 有真实成交额(USDT 计价) → 返回真实汇总。缺失与「真为 0」必须可区分。
+      - 换手率: 非 cn 无流通股本口径 → turnover 字段恒 None。
       - 无指数行情 → indices 为空（前端自行隐藏指数区块）。
     """
     from app.markets import get_market
@@ -624,16 +626,18 @@ def build_market_overview_market(
     empty = {
         "as_of": None, "quote_status": {"enabled": False},
         "indices": [], "breadth": {"total": 0, "up": 0, "down": 0, "flat": 0, "up_pct": 0, "down_pct": 0},
-        "amount": {"total": 0, "avg": 0}, "boards": [],
+        "amount": {"total": None, "avg": None}, "boards": [],
         "limit": {"limit_up": 0, "broken": 0, "failed": 0, "limit_down": 0, "max_boards": 0, "tiers": []},
         "distribution": [],
         "trend": {"above_ma5": 0, "above_ma20": 0, "above_ma60": 0, "above_ma5_pct": 0, "above_ma20_pct": 0, "above_ma60_pct": 0, "new_high": 0, "new_low": 0},
-        "activity": {"avg_turnover": 0, "high_turnover": 0, "high_vol_ratio": 0, "vol_ratio": 1},
+        "activity": {"avg_turnover": None, "high_turnover": None, "high_vol_ratio": 0, "vol_ratio": None},
         "radar": [], "emotion": {"score": 50, "label": "暂无"},
         "top_gainers": [], "top_losers": [], "turnover_leaders": [], "active_leaders": [],
         "concept_rank": {"leading": [], "lagging": []},
         "industry_rank": {"leading": [], "lagging": []},
         "market": market,
+        "date_caliber": "utc_day" if market == "crypto" else "exchange_day",
+        "universe_note": ("币安 USDT 现货成交额 Top 200" if market == "crypto" else None),
     }
     if not as_of:
         empty["as_of"] = None
@@ -678,8 +682,16 @@ def build_market_overview_market(
 
     vol_ratios = [_finite(r.get("vol_ratio_5d")) for r in rows]
     vol_ratios = [v for v in vol_ratios if v is not None]
-    avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else 1
+    avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else None
     high_vol_ratio = sum(1 for v in vol_ratios if v >= 1.5)
+
+    # 成交额: hk/us SDK 不提供(恒 0) → 视为缺失; crypto 有真实成交额(USDT)。
+    # 缺失返回 None 让前端显示「—」, 不把 0 伪装成真值。
+    amounts = [_finite(r.get("amount")) for r in rows]
+    amounts = [v for v in amounts if v is not None]
+    has_amount = any(v > 0 for v in amounts)
+    amount_total = sum(amounts) if has_amount else None
+    amount_avg = (amount_total / total) if (has_amount and total) else None
 
     strong_diff_pct = (strong_up - strong_down) / total * 100 if total else 0
     high_vol_pct = high_vol_ratio / total * 100 if total else 0
@@ -688,12 +700,15 @@ def build_market_overview_market(
 
     radar = [
         {"key": "profit", "label": "赚钱", "value": round(_score(up_pct, 20, 80) * 0.45 + _score(avg_pct, -0.02, 0.02) * 0.25 + _score(median_pct, -0.02, 0.02) * 0.20 + _score(strong_diff_pct, -8, 8) * 0.10)},
-        {"key": "money", "label": "量能", "value": round(_score(avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(high_vol_pct, 2, 12) * 0.30)},
+        # 量比缺失时「量能」维度记 None(不可计算), 不用中性值伪装
+        {"key": "money", "label": "量能", "value": (round(_score(avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(high_vol_pct, 2, 12) * 0.30)) if avg_vol_ratio is not None else None},
         {"key": "momentum", "label": "动量", "value": round(_score(new_high_pct, 0.5, 8) * 0.6 + _score(new_high - new_low, -20, 40) * 0.4)},
         {"key": "resilience", "label": "抗跌", "value": 100 - round(_score(down_pct, 20, 80) * 0.55 + _score(strong_down_pct, 1, 12) * 0.45)},
     ]
-    emotion_score = round(sum(r["value"] for r in radar) / len(radar)) if radar else 50
-    emotion_label = ("强势" if emotion_score >= 70 else "偏暖" if emotion_score >= 55
+    radar_values = [r["value"] for r in radar if r["value"] is not None]
+    emotion_score = round(sum(radar_values) / len(radar_values)) if radar_values else None
+    emotion_label = ("暂无" if emotion_score is None else
+                     "强势" if emotion_score >= 70 else "偏暖" if emotion_score >= 55
                      else "震荡" if emotion_score >= 45 else "偏冷" if emotion_score >= 30 else "冰点")
 
     return _json_safe({
@@ -705,8 +720,9 @@ def build_market_overview_market(
             "up_pct": up_pct, "down_pct": down_pct, "avg_pct": avg_pct,
             "median_pct": median_pct, "strong_up": strong_up, "strong_down": strong_down,
         },
-        "amount": {"total": 0, "avg": 0},
-        "boards": [{"board": meta.label, "count": total, "up": up, "down": down, "amount": 0.0}],
+        "amount": {"total": amount_total, "avg": amount_avg},
+        "boards": [{"board": meta.label, "count": total, "up": up, "down": down,
+                    "amount": (amount_total if has_amount else None)}],
         "limit": {"limit_up": new_high, "broken": 0, "failed": 0, "limit_down": new_low,
                   "max_boards": 0, "seal_rate": None, "tiers": [], "sealed_ready": False},
         "distribution": _pct_band_rows(pct_values),
@@ -717,14 +733,18 @@ def build_market_overview_market(
             "above_ma60_pct": above_ma60 / total * 100 if total else 0,
             "new_high": new_high, "new_low": new_low,
         },
-        "activity": {"avg_turnover": 0, "high_turnover": 0, "high_vol_ratio": high_vol_pct, "vol_ratio": avg_vol_ratio},
+        "activity": {"avg_turnover": None, "high_turnover": None,
+                     "high_vol_ratio": high_vol_pct, "vol_ratio": avg_vol_ratio},
         "radar": radar,
         "emotion": {"score": emotion_score, "label": emotion_label},
         "top_gainers": _top_rows(rows, "change_pct", True),
         "top_losers": _top_rows(rows, "change_pct", False),
-        "turnover_leaders": _top_rows(rows, "amount", True),
+        # hk/us 无成交额 → 成交额榜返回空而非 8 行「0」; crypto 返回真实榜
+        "turnover_leaders": _top_rows(rows, "amount", True) if has_amount else [],
         "active_leaders": _top_rows(rows, "vol_ratio_5d", True),
         "concept_rank": {"leading": [], "lagging": []},
         "industry_rank": {"leading": [], "lagging": []},
         "market": market,
+        "date_caliber": "utc_day" if market == "crypto" else "exchange_day",
+        "universe_note": ("币安 USDT 现货成交额 Top 200" if market == "crypto" else None),
     })

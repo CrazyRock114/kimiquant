@@ -232,25 +232,31 @@ def _build_user_prompt(overview: dict, news: list[dict], focus: str) -> str:
 # 摘要生成(供 meta 事件 / 历史报告 summary)
 # ================================================================
 
-def _recap_summary(overview: dict) -> str:
+def _recap_summary(overview: dict, market: str = "cn") -> str:
     """一句话摘要(供 meta 事件与历史列表展示)。
 
     指数用简称(上/深/创/科),与前端摘要条一致,避免列表里全称放不下。
+    非 cn 市场无涨跌停概念, 「涨停」改为「新高」; 成交额缺失时不展示该段,
+    不把 0 伪装成真值。
     """
     indices = overview.get("indices") or []
     emo = overview.get("emotion") or {}
     lim = overview.get("limit") or {}
     amt = overview.get("amount") or {}
-    total_amount = (amt.get("total") or 0) / 1e8
+    amt_total = amt.get("total")
 
     idx_str = "、".join(
         f"{_INDEX_SHORT.get(i.get('name') or '', i.get('name') or '')}{(i.get('change_pct') or 0):+.2f}%"
         for i in indices[:4]
     ) or "指数缺失"
-    return (
+    limit_word = "涨停" if market == "cn" else "新高"
+    parts = [
         f"{idx_str} | 情绪{emo.get('score',50)}({emo.get('label','—')}) | "
-        f"涨停{lim.get('limit_up',0)} | 成交{total_amount:.0f}亿"
-    )
+        f"{limit_word}{lim.get('limit_up',0)}"
+    ]
+    if amt_total is not None:
+        parts.append(f"成交{amt_total / 1e8:.0f}亿")
+    return " | ".join(parts)
 
 
 # ================================================================
@@ -293,7 +299,7 @@ async def recap_market_stream(
         "as_of": as_of_str,
         "emotion_score": emo.get("score", 50),
         "emotion_label": emo.get("label", "—"),
-        "summary": _recap_summary(overview),
+        "summary": _recap_summary(overview, "cn"),
     }, ensure_ascii=False)
 
     # 3+4. 构建 prompt + 流式调用 LLM(整体 try-except,任何异常 yield error,避免前端卡死)
@@ -314,7 +320,7 @@ async def recap_market_stream(
             got_content = True
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("AI market recap failed for %s: %s", as_of_str, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)
         return
@@ -344,7 +350,7 @@ async def recap_market_once(
     async for evt in recap_market_stream(repo, quote_service, depth_service, as_of, focus, news):
         try:
             obj = json.loads(evt)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         t = obj.get("type")
         if t == "meta":
@@ -428,7 +434,7 @@ async def recap_market_stream_market(
         "as_of": as_of_str,
         "emotion_score": emo.get("score", 50),
         "emotion_label": emo.get("label", "—"),
-        "summary": _recap_summary(overview),
+        "summary": _recap_summary(overview, market),
     }, ensure_ascii=False)
 
     try:
@@ -444,7 +450,7 @@ async def recap_market_stream_market(
             max_tokens=4500,
         ):
             yield json.dumps({"type": "delta", "content": delta}, ensure_ascii=False)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("AI market recap(%s) failed: %s", market, e)
         yield json.dumps({"type": "error", "message": f"AI 复盘失败: {e}"}, ensure_ascii=False)
         return

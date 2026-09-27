@@ -386,6 +386,10 @@ export interface OverviewDimensionRankItem {
 
 export interface OverviewMarket {
   as_of: string | null
+  /** 日期口径: exchange_day=交易所交易日(默认), utc_day=UTC 自然日(如 crypto) */
+  date_caliber?: string
+  /** 统计范围说明(如「币安 USDT 现货成交额 Top 200」), null=全市场 */
+  universe_note?: string | null
   quote_status: {
     enabled?: boolean
     running?: boolean
@@ -406,14 +410,15 @@ export interface OverviewMarket {
     strong_up?: number
     strong_down?: number
   }
-  amount: { total: number; avg: number }
-  boards: { board: string; count: number; up: number; down: number; up_pct: number; amount: number }[]
+  amount: { total: number | null; avg: number | null }
+  boards: { board: string; count: number; up: number; down: number; up_pct: number; amount: number | null }[]
+  /** 非 cn 市场: limit_up/limit_down 实为 60 日新高/新低计数(无涨跌停概念) */
   limit: { limit_up: number; broken: number; failed: number; limit_down: number; max_boards: number; seal_rate?: number; tiers: { boards: number; count: number; stocks?: { symbol: string; name?: string; amount?: number }[] }[]; sealed_ready?: boolean; fake_up?: number; fake_down?: number }
   distribution: { label: string; count: number; pct: number }[]
   trend: { above_ma5: number; above_ma20: number; above_ma60: number; above_ma5_pct: number; above_ma20_pct: number; above_ma60_pct: number; new_high: number; new_low: number }
-  activity: { avg_turnover: number; high_turnover: number; high_vol_ratio: number; vol_ratio: number }
-  radar: { key: string; label: string; value: number }[]
-  emotion: { score: number; label: string }
+  activity: { avg_turnover: number | null; high_turnover: number | null; high_vol_ratio: number; vol_ratio: number | null }
+  radar: { key: string; label: string; value: number | null }[]
+  emotion: { score: number | null; label: string }
   top_gainers: MarketSnapshotRow[]
   top_losers: MarketSnapshotRow[]
   turnover_leaders: MarketSnapshotRow[]

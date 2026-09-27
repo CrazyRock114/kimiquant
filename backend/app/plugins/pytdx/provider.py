@@ -75,6 +75,15 @@ def _is_a_stock(exchange: str, code: str) -> bool:
     return code.startswith(_STOCK_PREFIX.get(exchange, ()))
 
 
+def _to_naive_cn(dt):
+    """tz-aware datetime → naive 北京时间；naive 输入原样返回。"""
+    if dt is None or getattr(dt, "tzinfo", None) is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt
+    from app.markets import CN_TZ
+
+    return dt.astimezone(CN_TZ).replace(tzinfo=None)
+
+
 class PytdxConfig:
     # key 是数据集名（provider_has_dataset 据此判断能力）
     datasets: ClassVar[dict] = {"daily": True, "realtime": True, "minute": True, "adj_factor": True}
@@ -288,6 +297,11 @@ class PytdxProvider:
                 code = q.get("code", "")
                 price = float(q.get("price") or 0)
                 prev = float(q.get("last_close") or 0)
+                # 停牌股: TDX 返回 price=0/OHLC=0/vol=0, last_close=停牌前收盘。
+                # 不过滤会产出 -100% 涨跌幅与零价日K, 污染指标/告警/涨跌统计 ——
+                # 直接丢弃该记录, 下游保持停牌前旧数据（与日K路径 filter_halt_days 对齐）。
+                if price <= 0:
+                    continue
                 change = price - prev
                 rec = {
                     "symbol": f"{code}.{_TDX_TO_EXCHANGE[q['market']]}",
@@ -366,8 +380,17 @@ class PytdxProvider:
 
     def get_minute(self, symbols, start_time, end_time, asset_type="stock",
                    on_chunk_done=None, freq="1m") -> pl.DataFrame:
-        """分钟K。返回 [symbol, datetime, open, high, low, close, volume, amount]。"""
-        category = _FREQ_TO_CATEGORY.get(freq, 8)
+        """分钟K。返回 [symbol, datetime, open, high, low, close, volume, amount]。
+
+        TDX bar 时间为 naive 北京时间: tz-aware 的 start/end 先归一化为 naive,
+        否则比较必抛 TypeError 被吞掉导致静默空数据。未知 freq 抛错而非静默
+        映射错周期（mislabeled data 比报错更危险）。
+        """
+        category = _FREQ_TO_CATEGORY.get(freq)
+        if category is None:
+            raise ValueError(f"pytdx 不支持的分钟周期: {freq!r}（可选: {sorted(_FREQ_TO_CATEGORY)}）")
+        start_time = _to_naive_cn(start_time)
+        end_time = _to_naive_cn(end_time)
         rows: list[dict] = []
         for i, symbol in enumerate(symbols):
             try:

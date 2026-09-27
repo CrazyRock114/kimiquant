@@ -35,6 +35,9 @@ _SUFFIX_MAP = {
 # 市场列表（管道/API 枚举用）
 ALL_MARKETS = [MARKET_CN, MARKET_HK, MARKET_US, MARKET_CRYPTO]
 
+# 加密货币常见计价资产（normalize_symbol 的币对识别白名单）
+_CRYPTO_QUOTE_ASSETS = ("USDT", "USDC", "FDUSD", "BUSD", "DAI", "TRY", "BTC", "ETH", "BNB")
+
 
 @dataclass(frozen=True)
 class MarketMeta:
@@ -50,6 +53,7 @@ class MarketMeta:
     default_limit_pct: float | None  # 默认涨跌幅 %（cn 占位 10，实际按板块；港美股 None）
     # 交易时段（北京时间，24h 制）。跨午夜时段用 end < start 表示（美股）。
     sessions: tuple[tuple[dt_time, dt_time], ...]
+    fractional: bool = False       # 是否允许零碎数量成交（加密货币 True，股票 False）
 
 
 _META: dict[str, MarketMeta] = {
@@ -76,6 +80,8 @@ _META: dict[str, MarketMeta] = {
         market=MARKET_CRYPTO, label="加密", exchanges=("BINANCE",),
         t_plus=0, stamp_tax=0.0, stamp_tax_double_sided=False,
         lot_size=1, price_round=0.0001, has_limit=False, default_limit_pct=None,
+        # 加密货币支持零碎数量成交（如 0.001 BTC），无整手概念
+        fractional=True,
         # 7x24 全年无休：单时段近似覆盖全天（is_trading_now 只看当天时段，无星期概念）
         sessions=((dt_time(0, 0), dt_time(23, 59, 59)),),
     ),
@@ -119,12 +125,13 @@ def normalize_symbol(symbol: str) -> str:
             return code + "." + s[:2]
     if s.endswith((".SH", ".SZ", ".BJ", ".HK", ".US", ".CRYPTO")):
         return s
-    # 加密货币交易对: BTC-USDT / BTC/USDT → BTCUSDT.CRYPTO
+    # 加密货币交易对: BTC-USDT / BTC/USDT / 1000PEPE-USDT → BTCUSDT.CRYPTO。
+    # quote 端必须属于已知计价资产, 否则 BRK-B / HEI-A(美股A/B类股) 会被误判成 crypto。
     for sep in ("-", "/"):
         if sep in s:
-            pair = s.replace(sep, "")
-            if pair.isalpha():
-                return pair + ".CRYPTO"
+            base, _, quote = s.partition(sep)
+            if base and quote in _CRYPTO_QUOTE_ASSETS:
+                return base + quote + ".CRYPTO"
     if s.isdigit():
         # 纯数字 A 股代码 → 交易所后缀。
         # 北交所必须先判: 920xxx 与沪市 B 股 900xxx 同以 "9" 开头, 若先走
@@ -134,6 +141,10 @@ def normalize_symbol(symbol: str) -> str:
         if s.startswith(("920", "8", "4")):
             return s + ".BJ"
         return s + (".SH" if s.startswith(("6", "9")) else ".SZ")
+    # 裸币安交易对: BTCUSDT / DOGEUSDC（全字母且以计价资产结尾）→ .CRYPTO。
+    # 必须先于美股兜底, 否则 BTCUSDT 会被误判为美股。
+    if s.isalpha() and len(s) > 4 and any(s.endswith(q) and len(s) > len(q) for q in _CRYPTO_QUOTE_ASSETS):
+        return s + ".CRYPTO"
     return s + ".US"
 
 
@@ -219,3 +230,8 @@ def stamp_tax_double_sided(market: str) -> bool:
 
 def lot_size_for(market: str) -> int:
     return get_market(market).lot_size
+
+
+def allows_fractional(market: str) -> bool:
+    """是否允许零碎数量成交（加密货币 True）。回测撮合据此跳过整手取整。"""
+    return get_market(market).fractional

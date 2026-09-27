@@ -325,7 +325,7 @@ export function Review() {
           ) : (
             <>
               {/* ===== 市场摘要条(轻量上下文,非重复看板)===== */}
-              <MarketSummaryBar data={data} />
+              <MarketSummaryBar data={data} isCn={isCn} />
 
               {/* ===== 关注点输入 ===== */}
               <div className="flex items-center gap-2 rounded-card border border-border bg-surface/80 px-3.5 py-2.5 transition-colors focus-within:border-accent/40">
@@ -566,7 +566,7 @@ function parseIndexPcts(indexSegment: string): { name: string; pctStr: string; p
   return out
 }
 
-function MarketSummaryBar({ data }: { data: OverviewMarket }) {
+function MarketSummaryBar({ data, isCn }: { data: OverviewMarket; isCn: boolean }) {
   const score = data.emotion?.score ?? null
   const emoColor = scoreColor(score)
   const indices = (data.indices ?? []).slice(0, 4)
@@ -611,11 +611,11 @@ function MarketSummaryBar({ data }: { data: OverviewMarket }) {
         <span className="font-mono font-semibold text-bear">{data.breadth?.down ?? 0}</span>
       </div>
 
-      {/* 涨停结构 */}
+      {/* 涨停结构(非 cn: limit_up 实为 60 日新高计数, 无封板概念) */}
       <div className="flex items-center gap-1.5 text-[11px]">
-        <span className="text-secondary">涨停</span>
+        <span className="text-secondary">{isCn ? '涨停' : '新高'}</span>
         <span className="font-mono font-semibold text-bull">{data.limit?.limit_up ?? 0}</span>
-        <span className="text-secondary">封板 {(data.limit?.seal_rate ?? 0).toFixed(0)}%</span>
+        {isCn && <span className="text-secondary">封板 {(data.limit?.seal_rate ?? 0).toFixed(0)}%</span>}
       </div>
 
       {/* 成交额 */}
